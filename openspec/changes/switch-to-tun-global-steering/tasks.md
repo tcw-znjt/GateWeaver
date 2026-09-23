@@ -20,4 +20,4 @@
 ## 4. 验证与发布
 
 - [x] 4.1 全量 vet/test/交叉编译/fnpack 出包通过
-- [ ] 4.2 提交推送、tag v0.3.0、CI/Release 全绿含双架构 .fpk
+- [x] 4.2 提交推送、tag v0.3.0、CI/Release 全绿含双架构 .fpk
