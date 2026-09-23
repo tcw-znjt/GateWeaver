@@ -30,11 +30,13 @@ type App struct {
 	Log      *auditlog.Logger
 	Runner   fwd.Runner
 
-	health *fwd.Health
+	health     *fwd.Health
+	clashHealth *fwd.ClashHealth
 
 	mu            sync.Mutex
 	gwIP          netip.Addr // 生效的上游（配置或探测）
 	upstreamOK    bool
+	clashOK       bool
 	forwardEnsured bool
 	cancel        context.CancelFunc
 }
@@ -50,7 +52,7 @@ func New(store *config.Store, log *auditlog.Logger, factory neti.TransceiverFact
 	return &App{
 		Store: store, Engine: eng, Sysctl: sys, Rules: rules,
 		Probe: pr, Scanner: discover.NewScanner(runner), Log: log, Runner: runner,
-		upstreamOK: true,
+		upstreamOK: true, clashOK: true,
 	}
 }
 
@@ -78,7 +80,89 @@ func (a *App) Start(ctx context.Context) error {
 	a.health = fwd.NewHealth(a.Runner, gw.String(), iv, 3,
 		a.onUpstreamDown, a.onUpstreamUp, a.onUpstreamChange)
 	a.health.Start(hctx)
+	a.startClashHealth(hctx)
 	return nil
+}
+
+// startClashHealth 创建/刷新 Clash 端口探测（未启用时探测空地址恒为健康）。
+func (a *App) startClashHealth(ctx context.Context) {
+	cfg := a.Store.Snapshot()
+	if a.clashHealth == nil {
+		a.clashHealth = fwd.NewClashHealth(fwd.NetDialer{}, a.clashProbeAddrs(cfg), 5*time.Second, 3,
+			a.onClashDown, a.onClashUp)
+		a.clashHealth.Start(ctx)
+	} else {
+		a.clashHealth.SetTargets(a.clashProbeAddrs(cfg))
+		a.clashHealth.SetEnabled(cfg.ClashEnabled)
+	}
+}
+
+func (a *App) clashProbeAddrs(cfg *config.Config) []string {
+	if !cfg.ClashEnabled {
+		return nil
+	}
+	base := cfg.ClashAddr
+	if base == "" {
+		base = "127.0.0.1"
+	}
+	out := []string{}
+	if cfg.ClashTCPPort > 0 {
+		out = append(out, fmt.Sprintf("%s:%d", base, cfg.ClashTCPPort))
+	}
+	if cfg.ClashDNSPort > 0 {
+		out = append(out, fmt.Sprintf("%s:%d", base, cfg.ClashDNSPort))
+	}
+	return out
+}
+
+func (a *App) onClashDown() {
+	a.mu.Lock()
+	a.clashOK = false
+	a.mu.Unlock()
+	a.Log.Log("upstream", "system", "", "Clash 不可达：via-clash 目标按策略降级直连")
+	if err := a.Apply(a.Store.Snapshot()); err != nil {
+		a.Log.Logf("error", "system", "", "Clash 降级重算失败: %v", err)
+	}
+}
+
+func (a *App) onClashUp() {
+	a.mu.Lock()
+	a.clashOK = true
+	a.mu.Unlock()
+	a.Log.Log("upstream", "system", "", "Clash 恢复可达：重新引流 via-clash 目标")
+	if err := a.Apply(a.Store.Snapshot()); err != nil {
+		a.Log.Logf("error", "system", "", "Clash 恢复重算失败: %v", err)
+	}
+}
+
+// ClashOK 返回 Clash 探测状态。
+func (a *App) ClashOK() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.clashOK
+}
+
+// ClashStateView 管理台展示结构。
+type ClashStateView struct {
+	Enabled  bool   `json:"enabled"`
+	Addr     string `json:"addr"`
+	TCPPort  int    `json:"tcp_port"`
+	DNSPort  int    `json:"dns_port"`
+	UDPPort  int    `json:"udp_port"`
+	Healthy  bool   `json:"healthy"`
+	Degraded bool   `json:"degraded"` // 启用且不可达（存在降级中的目标）
+}
+
+// ClashState 汇总 Clash 配置与探测状态。
+func (a *App) ClashState() ClashStateView {
+	cfg := a.Store.Snapshot()
+	v := ClashStateView{
+		Enabled: cfg.ClashEnabled, Addr: cfg.ClashAddr,
+		TCPPort: cfg.ClashTCPPort, DNSPort: cfg.ClashDNSPort, UDPPort: cfg.ClashUDPPort,
+		Healthy: a.ClashOK(),
+	}
+	v.Degraded = v.Enabled && !v.Healthy
+	return v
 }
 
 // Apply 将一份配置投影到引擎与转发层（幂等，可热调用）。
@@ -111,16 +195,41 @@ func (a *App) Apply(cfg *config.Config) error {
 	if err := a.Engine.ApplyTargets(cfg.Targets); err != nil {
 		return err
 	}
+	if a.clashHealth != nil {
+		a.clashHealth.SetTargets(a.clashProbeAddrs(cfg))
+		a.clashHealth.SetEnabled(cfg.ClashEnabled)
+	}
 	return a.syncForwarding(cfg)
+}
+
+// splitPaths 把启用目标划为直连与经 Clash 两集合（互斥；降级策略见 clash-traffic-steering spec）。
+func (a *App) splitPaths(cfg *config.Config) (direct, clash []string) {
+	if !cfg.GlobalEnabled || !cfg.LicensedAck || !a.UpstreamOK() {
+		return
+	}
+	for _, t := range cfg.Targets {
+		if !t.Enabled {
+			continue
+		}
+		switch {
+		case t.ViaClash && cfg.ClashEnabled && a.ClashOK():
+			clash = append(clash, t.IP)
+		case t.ViaClash && cfg.ClashEnabled && !cfg.ClashFailDirect:
+			clash = append(clash, t.IP) // 不降级：维持改道（Clash 不可达时该设备外网暂断，属用户选择）
+		default:
+			direct = append(direct, t.IP)
+		}
+	}
+	return
 }
 
 // syncForwarding 依据"是否有实际生效的目标"维护内核与规则。
 func (a *App) syncForwarding(cfg *config.Config) error {
 	ctx := context.Background()
-	active := a.activeTargetIPs(cfg)
-	if len(active) == 0 {
+	direct, clash := a.splitPaths(cfg)
+	if len(direct) == 0 && len(clash) == 0 {
 		// 无目标：清空规则；内核改动保留至停机（可能被 Docker 等共享，避免抖动）
-		return a.Rules.Sync(ctx, nil, false)
+		return a.Rules.Sync(ctx, nil, nil, false, fwd.ClashParams{})
 	}
 	if !a.forwardEnsured {
 		if err := a.Sysctl.Set(ctx, "net.ipv4.ip_forward", "1"); err != nil {
@@ -136,20 +245,8 @@ func (a *App) syncForwarding(cfg *config.Config) error {
 		a.mu.Unlock()
 	}
 	masq := cfg.ForwardMode == config.ModeMasq
-	return a.Rules.Sync(ctx, active, masq)
-}
-
-func (a *App) activeTargetIPs(cfg *config.Config) []string {
-	if !cfg.GlobalEnabled || !cfg.LicensedAck || !a.UpstreamOK() {
-		return nil
-	}
-	var out []string
-	for _, t := range cfg.Targets {
-		if t.Enabled {
-			out = append(out, t.IP)
-		}
-	}
-	return out
+	p := fwd.ClashParams{Addr: cfg.ClashAddr, TCPPort: cfg.ClashTCPPort, DNSPort: cfg.ClashDNSPort, UDPPort: cfg.ClashUDPPort}
+	return a.Rules.Sync(ctx, direct, clash, masq, p)
 }
 
 func ifacesOf(targets []config.Target, enabledOnly bool) map[string]bool {
@@ -172,7 +269,7 @@ func (a *App) onUpstreamDown() {
 	a.mu.Unlock()
 	a.Log.Log("upstream", "system", "", "上游网关不可达：fail-open 撤销全部接管")
 	a.Engine.RestoreAll("upstream down")
-	if err := a.Rules.Sync(context.Background(), nil, false); err != nil {
+	if err := a.Rules.Sync(context.Background(), nil, nil, false, fwd.ClashParams{}); err != nil {
 		a.Log.Logf("error", "system", "", "清空转发规则失败: %v", err)
 	}
 }

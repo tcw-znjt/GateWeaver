@@ -126,23 +126,39 @@ func (m *SysctlMgr) persist() {
 // --- 包过滤规则（iptables，Debian nft 后端兼容同名命令） ---
 
 const (
-	fwdChain = "GW_FORWARD"
-	natChain = "GW_POSTROUTING"
-	comment  = "gateweaver"
+	fwdChain     = "GW_FORWARD"
+	natChain     = "GW_POSTROUTING"
+	clashTCPChain = "GW_CLASH_TCP"
+	clashDNSChain = "GW_CLASH_DNS"
+	clashUDPChain = "GW_CLASH_UDP"
+	comment      = "gateweaver"
+	tproxyMark   = "0x1/0x1"
+	tproxyTable  = "100"
 )
 
-// RuleMgr 维护两条自定义链：FORWARD→GW_FORWARD（按目标放行）、
-// POSTROUTING→GW_POSTROUTING（masquerade 模式下按目标改写源）。
-// 目标集合外零影响（traffic-forwarding spec）。
+// ClashParams Clash 引流参数（ClashAddr 空 = 本机 REDIRECT；否则 DNAT/TPROXY 到该 IPv4）。
+type ClashParams struct {
+	Addr    string // ""=本机
+	TCPPort int
+	DNSPort int
+	UDPPort int // 0 = 不做 UDP TPROXY
+}
+
+// RuleMgr 维护：FORWARD→GW_FORWARD（直连放行）、POSTROUTING→GW_POSTROUTING（伪装）、
+// PREROUTING→GW_CLASH_DNS/GW_CLASH_TCP（nat 改道），可选 PREROUTING→GW_CLASH_UDP（mangle TPROXY）。
+// 目标集合按 direct/clash 两态动态迁移，私网目的绕行。
 type RuleMgr struct {
 	r       Runner
 	mu      sync.Mutex
-	present map[string]bool // 当前已下发的目标 IP
+	direct  map[string]bool // GW_FORWARD 已下发目标
+	masqSet map[string]bool // GW_POSTROUTING 已伪装目标
+	clash   map[string]bool // 改道链已下发目标
+	udpOn   bool            // TPROXY 规则+策略路由已建立
 	hooked  bool
 }
 
 func NewRuleMgr(r Runner) *RuleMgr {
-	return &RuleMgr{r: r, present: map[string]bool{}}
+	return &RuleMgr{r: r, direct: map[string]bool{}, masqSet: map[string]bool{}, clash: map[string]bool{}}
 }
 
 func (m *RuleMgr) run(ctx context.Context, args ...string) error {
@@ -153,21 +169,36 @@ func (m *RuleMgr) run(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// EnsureChains 建链并挂载钩子（幂等：-C 已存在则跳过）。
+// EnsureChains 建链并挂 PREROUTING 钩子（幂等）。
 func (m *RuleMgr) EnsureChains(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.hooked {
 		return nil
 	}
-	// 新建（已存在报错忽略）
-	_, _ = m.r.Run(ctx, "iptables", "-t", "filter", "-N", fwdChain)
-	_, _ = m.r.Run(ctx, "iptables", "-t", "nat", "-N", natChain)
+	for _, c := range [][3]string{
+		{"filter", fwdChain, ""}, {"nat", natChain, ""}, {"nat", clashTCPChain, ""}, {"nat", clashDNSChain, ""},
+	} {
+		_, _ = m.r.Run(ctx, "iptables", "-t", c[0], "-N", c[1])
+	}
 	if err := m.linkIfAbsent(ctx, "filter", "FORWARD", fwdChain); err != nil {
 		return err
 	}
 	if err := m.linkIfAbsent(ctx, "nat", "POSTROUTING", natChain); err != nil {
 		return err
+	}
+	// DNS 链先挂（53 优先于 TCP 全量与私网绕行）
+	if err := m.linkIfAbsent(ctx, "nat", "PREROUTING", clashDNSChain); err != nil {
+		return err
+	}
+	if err := m.linkIfAbsent(ctx, "nat", "PREROUTING", clashTCPChain); err != nil {
+		return err
+	}
+	// TCP 链内的静态绕行：RFC1918 目的不改道（clash-traffic-steering spec）
+	for _, net := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		if err := m.addIfAbsent(ctx, "nat", clashTCPChain, "-d", net, "-j", "RETURN"); err != nil {
+			return err
+		}
 	}
 	m.hooked = true
 	return nil
@@ -181,50 +212,6 @@ func (m *RuleMgr) linkIfAbsent(ctx context.Context, table, parent, chain string)
 	return m.run(ctx, "-t", table, "-A", parent, "-j", chain, "-m", "comment", "--comment", comment)
 }
 
-// Sync 将规则与目标集合 + 模式对齐：新增 -A、移除 -D。masq=false 时清空伪装规则。
-func (m *RuleMgr) Sync(ctx context.Context, ips []string, masq bool) error {
-	if err := m.EnsureChains(ctx); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	desired := map[string]bool{}
-	for _, ip := range ips {
-		desired[ip] = true
-	}
-	for ip := range desired {
-		if !m.present[ip] {
-			if err := m.run(ctx, "-t", "filter", "-A", fwdChain, "-s", ip+"/32", "-j", "ACCEPT",
-				"-m", "comment", "--comment", comment); err != nil {
-				return err
-			}
-		}
-		if masq {
-			if err := m.addIfAbsent(ctx, "nat", natChain, "-s", ip+"/32", "-j", "MASQUERADE"); err != nil {
-				return err
-			}
-		}
-	}
-	for ip := range m.present {
-		if !desired[ip] {
-			_ = m.run(ctx, "-t", "filter", "-D", fwdChain, "-s", ip+"/32", "-j", "ACCEPT",
-				"-m", "comment", "--comment", comment)
-			_ = m.run(ctx, "-t", "nat", "-D", natChain, "-s", ip+"/32", "-j", "MASQUERADE")
-			delete(m.present, ip)
-		}
-	}
-	if !masq {
-		// 模式回退：清掉全部伪装规则（链保留）
-		for ip := range desired {
-			_ = m.run(ctx, "-t", "nat", "-D", natChain, "-s", ip+"/32", "-j", "MASQUERADE")
-		}
-	}
-	for ip := range desired {
-		m.present[ip] = true
-	}
-	return nil
-}
-
 func (m *RuleMgr) addIfAbsent(ctx context.Context, table, chain string, args ...string) error {
 	full := append([]string{"-t", table, "-C", chain}, args...)
 	if _, err := m.r.Run(ctx, "iptables", full...); err == nil {
@@ -234,7 +221,165 @@ func (m *RuleMgr) addIfAbsent(ctx context.Context, table, chain string, args ...
 	return m.run(ctx, full...)
 }
 
-// Cleanup 完全拆除：摘钩子、清规则、删链（uninstall/stop 兜底）。
+func (m *RuleMgr) delQuiet(ctx context.Context, table, chain string, args ...string) {
+	full := append([]string{"-t", table, "-D", chain}, args...)
+	_, _ = m.r.Run(ctx, "iptables", full...)
+}
+
+// Sync 全量对齐：directIPs 走直连放行（masq 时对同集合伪装），clashIPs 走改道链。
+// 两集合互斥；冲突时 direct 优先。p 仅对 clashIPs 生效。
+func (m *RuleMgr) Sync(ctx context.Context, directIPs, clashIPs []string, masq bool, p ClashParams) error {
+	if err := m.EnsureChains(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	direct := toSet(directIPs)
+	clash := toSet(clashIPs)
+	for ip := range clash {
+		if direct[ip] {
+			delete(clash, ip) // 互斥：direct 优先
+		}
+	}
+
+	// --- direct 链增删 ---
+	for ip := range direct {
+		if !m.direct[ip] {
+			if err := m.run(ctx, "-t", "filter", "-A", fwdChain, "-s", ip+"/32", "-j", "ACCEPT",
+				"-m", "comment", "--comment", comment); err != nil {
+				return err
+			}
+			m.direct[ip] = true
+		}
+	}
+	// --- clash 链增删 ---
+	tcpT := m.clashTCPArgs(p)
+	dnsT := m.clashDNSArgs(p)
+	for ip := range clash {
+		if !m.clash[ip] {
+			if err := m.addIfAbsent(ctx, "nat", clashTCPChain, append([]string{"-s", ip + "/32"}, tcpT...)...); err != nil {
+				return err
+			}
+			for _, a := range dnsT {
+				if err := m.addIfAbsent(ctx, "nat", clashDNSChain, append([]string{"-s", ip + "/32"}, a...)...); err != nil {
+					return err
+				}
+			}
+			m.clash[ip] = true
+		}
+	}
+	// 移除项
+	for ip := range m.direct {
+		if !direct[ip] {
+			m.delQuiet(ctx, "filter", fwdChain, "-s", ip+"/32", "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+			delete(m.direct, ip)
+		}
+	}
+	for ip := range m.clash {
+		if !clash[ip] {
+			m.delQuiet(ctx, "nat", clashTCPChain, append([]string{"-s", ip + "/32"}, tcpT...)...)
+			for _, a := range dnsT {
+				m.delQuiet(ctx, "nat", clashDNSChain, append([]string{"-s", ip + "/32"}, a...)...)
+			}
+			delete(m.clash, ip)
+		}
+	}
+	// --- 伪装（仅 direct） ---
+	for ip := range direct {
+		if masq {
+			if err := m.addIfAbsent(ctx, "nat", natChain, "-s", ip+"/32", "-j", "MASQUERADE"); err != nil {
+				return err
+			}
+		}
+	}
+	for ip := range m.masqSet {
+		if !direct[ip] || !masq {
+			m.delQuiet(ctx, "nat", natChain, "-s", ip+"/32", "-j", "MASQUERADE")
+			delete(m.masqSet, ip)
+		}
+	}
+	for ip := range direct {
+		if masq {
+			m.masqSet[ip] = true
+		}
+	}
+
+	// --- 可选 UDP TPROXY ---
+	if p.UDPPort > 0 && len(clash) > 0 {
+		if err := m.enableUDP(ctx, p); err != nil {
+			return err
+		}
+		for ip := range clash {
+			if err := m.addIfAbsent(ctx, "mangle", clashUDPChain,
+				"-s", ip+"/32", "-p", "udp", "-j", "TPROXY",
+				"--on-ip", orLocal(p.Addr), "--on-port", fmt.Sprint(p.UDPPort), "--tproxy-mark", tproxyMark); err != nil {
+				return err
+			}
+		}
+	} else if m.udpOn {
+		m.disableUDP(ctx)
+	}
+	return nil
+}
+
+func (m *RuleMgr) clashTCPArgs(p ClashParams) []string {
+	if p.Addr == "" {
+		return []string{"-p", "tcp", "-j", "REDIRECT", "--to-ports", fmt.Sprint(p.TCPPort)}
+	}
+	return []string{"-p", "tcp", "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", p.Addr, p.TCPPort)}
+}
+
+func (m *RuleMgr) clashDNSArgs(p ClashParams) [][]string {
+	d := fmt.Sprint(p.DNSPort)
+	if p.Addr == "" {
+		return [][]string{
+			{"-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", d},
+			{"-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", d},
+		}
+	}
+	dst := fmt.Sprintf("%s:%d", p.Addr, p.DNSPort)
+	return [][]string{
+		{"-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", dst},
+		{"-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", dst},
+	}
+}
+
+func orLocal(addr string) string {
+	if addr == "" {
+		return "0.0.0.0"
+	}
+	return addr
+}
+
+// enableUDP 建立 mangle TPROXY 链与策略路由（幂等；置 udpOn 供拆除判断）。
+func (m *RuleMgr) enableUDP(ctx context.Context, p ClashParams) error {
+	if !m.udpOn {
+		_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-N", clashUDPChain)
+		if err := m.linkIfAbsent(ctx, "mangle", "PREROUTING", clashUDPChain); err != nil {
+			return err
+		}
+		if _, err := m.r.Run(ctx, "sh", "-c", "ip rule show | grep -q 'fwmark 0x1/0x1' || ip rule add fwmark 0x1/0x1 table "+tproxyTable); err != nil {
+			return fmt.Errorf("ip rule fwmark: %w", err)
+		}
+		if _, err := m.r.Run(ctx, "sh", "-c", "ip route show table "+tproxyTable+" | grep -q 'local default' || ip route add local default dev lo table "+tproxyTable); err != nil {
+			return fmt.Errorf("ip route local: %w", err)
+		}
+		m.udpOn = true
+	}
+	return nil
+}
+
+func (m *RuleMgr) disableUDP(ctx context.Context) {
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-F", clashUDPChain)
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-D", "PREROUTING", "-j", clashUDPChain)
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-X", clashUDPChain)
+	_, _ = m.r.Run(ctx, "sh", "-c", "ip rule show | grep -q 'fwmark 0x1/0x1' && while ip rule del fwmark 0x1/0x1 table "+tproxyTable+" 2>/dev/null; do :; done; true")
+	_, _ = m.r.Run(ctx, "sh", "-c", "ip route show table "+tproxyTable+" | grep -q 'local default' && ip route del local default dev lo table "+tproxyTable+"; true")
+	m.udpOn = false
+}
+
+// Cleanup 完全拆除（stop/uninstall 兜底）。
 func (m *RuleMgr) Cleanup(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -246,11 +391,27 @@ func (m *RuleMgr) Cleanup(ctx context.Context) error {
 	}
 	try("-t", "filter", "-D", "FORWARD", "-j", fwdChain)
 	try("-t", "nat", "-D", "POSTROUTING", "-j", natChain)
-	try("-t", "filter", "-F", fwdChain)
-	try("-t", "nat", "-F", natChain)
-	try("-t", "filter", "-X", fwdChain)
-	try("-t", "nat", "-X", natChain)
-	m.present = map[string]bool{}
-	m.hooked = false
+	try("-t", "nat", "-D", "PREROUTING", "-j", clashDNSChain)
+	try("-t", "nat", "-D", "PREROUTING", "-j", clashTCPChain)
+	for _, pair := range [][2]string{{"filter", fwdChain}, {"nat", natChain}, {"nat", clashDNSChain}, {"nat", clashTCPChain}} {
+		try("-t", pair[0], "-F", pair[1])
+		try("-t", pair[0], "-X", pair[1])
+	}
+	// UDP 侧尽力拆除（无论 udpOn）
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-D", "PREROUTING", "-j", clashUDPChain)
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-F", clashUDPChain)
+	_, _ = m.r.Run(ctx, "iptables", "-t", "mangle", "-X", clashUDPChain)
+	_, _ = m.r.Run(ctx, "sh", "-c", "while ip rule del fwmark 0x1/0x1 table "+tproxyTable+" 2>/dev/null; do :; done; true")
+	_, _ = m.r.Run(ctx, "sh", "-c", "ip route del local default dev lo table "+tproxyTable+" 2>/dev/null; true")
+	m.direct, m.masqSet, m.clash = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	m.udpOn, m.hooked = false, false
 	return firstErr
+}
+
+func toSet(ips []string) map[string]bool {
+	out := make(map[string]bool, len(ips))
+	for _, ip := range ips {
+		out[ip] = true
+	}
+	return out
 }

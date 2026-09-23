@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.0}"
 FPK_ARCH="${FPK_ARCH:-amd64}"   # amd64 | arm64
 FPK_NAME="GateWeaver_v${VERSION}_${FPK_ARCH}"
 mkdir -p dist build

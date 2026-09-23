@@ -372,3 +372,45 @@ func TestInterfacesEndpoint(t *testing.T) {
 		t.Fatalf("eth0 addrs = %v", eth.Addrs)
 	}
 }
+
+// clash-steering 2.2：Clash 配置、via_clash 热更新、overview 状态
+func TestClashConfigAndTargets(t *testing.T) {
+	h, store, _ := newHarness(t)
+	_, _ = h.call("POST", "/api/setup", "", map[string]string{"password": "testpass123"})
+	tok := h.login(t, "testpass123")
+
+	// 非法 Clash 地址被拒且不落盘
+	resp, _ := h.call("PUT", "/api/config", tok, map[string]any{"clash_enabled": true, "clash_addr": "not-an-ip"})
+	if resp.StatusCode != 400 {
+		t.Fatal("bad clash_addr must 400")
+	}
+	if store.Snapshot().ClashEnabled {
+		t.Fatal("rejected update must not persist")
+	}
+	// 合法配置
+	if resp, _ := h.call("PUT", "/api/config", tok, map[string]any{
+		"clash_enabled": true, "clash_addr": "", "clash_tcp_port": 7893, "clash_dns_port": 7874}); resp.StatusCode != 200 {
+		t.Fatal("valid clash config failed")
+	}
+	c := store.Snapshot()
+	if !c.ClashEnabled || c.ClashTCPPort != 7893 {
+		t.Fatalf("clash config not persisted: %+v", c)
+	}
+	// 目标带 via_clash
+	_, _ = h.call("POST", "/api/license/ack", tok, map[string]any{})
+	if resp, _ := h.call("POST", "/api/targets", tok, config.Target{MAC: "dd:dd:dd:dd:dd:dd", IP: "192.168.1.91", Iface: "eth0", Enabled: true, ViaClash: true}); resp.StatusCode != 201 {
+		t.Fatal("add via-clash target failed")
+	}
+	if resp, _ := h.call("PUT", "/api/targets/dd:dd:dd:dd:dd:dd", tok, map[string]bool{"via_clash": false}); resp.StatusCode != 200 {
+		t.Fatal("via_clash hot update failed")
+	}
+	if store.Snapshot().Targets[0].ViaClash {
+		t.Fatal("via_clash should be false after update")
+	}
+	// overview 携带 clash 状态
+	_, ov := h.call("GET", "/api/overview", tok, nil)
+	cl, ok := ov["clash"].(map[string]any)
+	if !ok || cl["enabled"] != true || cl["healthy"] != true {
+		t.Fatalf("overview.clash wrong: %v", ov["clash"])
+	}
+}

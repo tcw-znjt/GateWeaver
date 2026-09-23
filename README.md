@@ -28,6 +28,20 @@
 - 上游网关显示（自动探测/手动固定）、送达模式、注入间隔与限速、fail-open 开关
 - 事件与审计日志；首次使用授权声明确认
 
+## 配合 Clash 使用（可选，v0.2+）
+
+Clash 作为**独立应用**安装（fnOS 商店或 Docker 均可），GateWeaver 负责把"经 Clash"设备的流量改道给它：
+
+1. Clash 侧要求：`allow-lan: true`，开启 `redir-port`（TCP，如 7893）与 `dns.listen`（如 :7874，
+   建议 `enhanced-mode: fake-ip`，并把 fnOS/内网网段加入 `fake-ip-filter`）；需 UDP 全量改道再开
+   `tproxy-port`（如 7895）。Docker bridge 部署时记下容器 IP 填到"Clash 地址"。
+2. GateWeaver 设置页 → Clash 引流：勾选启用、填端口/地址。
+3. 目标管理：每台设备可单独选 **直连转发**（原方案，仅旁路到 NAS 后走主路由）或 **经 Clash**。
+4. Clash 进程停止/端口不可达时，"经 Clash"设备自动降级为直连转发（可关），恢复后自动重引流。
+
+原理：对目标设备下发 `PREROUTING` REDIRECT/DNAT（TCP+DNS53）与可选 TPROXY（UDP，fwmark 策略路由），
+私网目的（RFC1918）自动绕行不影响访问 NAS/内网服务。注意此方案仅代理**经接管**的设备；未接管设备不受影响。
+
 ## 限制
 
 - 目标设备须与 fnOS 处于**同一二层网段**（跨 VLAN/三层隔离不可接管）；

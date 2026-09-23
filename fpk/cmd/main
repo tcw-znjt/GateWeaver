@@ -67,10 +67,16 @@ stop_process() {
   # 兜底：拆除本应用包过滤链与 sysctl 快照还原（幂等）
   iptables -t filter -D FORWARD -j GW_FORWARD 2>/dev/null || true
   iptables -t nat -D POSTROUTING -j GW_POSTROUTING 2>/dev/null || true
-  iptables -t filter -F GW_FORWARD 2>/dev/null || true
-  iptables -t nat -F GW_POSTROUTING 2>/dev/null || true
-  iptables -t filter -X GW_FORWARD 2>/dev/null || true
-  iptables -t nat -X GW_POSTROUTING 2>/dev/null || true
+  iptables -t nat -D PREROUTING -j GW_CLASH_TCP 2>/dev/null || true
+  iptables -t nat -D PREROUTING -j GW_CLASH_DNS 2>/dev/null || true
+  iptables -t mangle -D PREROUTING -j GW_CLASH_UDP 2>/dev/null || true
+  for t_c in "filter GW_FORWARD" "nat GW_POSTROUTING" "nat GW_CLASH_TCP" "nat GW_CLASH_DNS" "mangle GW_CLASH_UDP"; do
+    set -- $t_c
+    iptables -t "$1" -F "$2" 2>/dev/null || true
+    iptables -t "$1" -X "$2" 2>/dev/null || true
+  done
+  while ip rule del fwmark 0x1/0x1 table 100 2>/dev/null; do :; done
+  ip route del local default dev lo table 100 2>/dev/null || true
   SNAP="${DATA_DIR}/config.json.sysctl.orig"
   if [ -f "$SNAP" ]; then
     while IFS='=' read -r key val; do

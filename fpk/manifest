@@ -1,5 +1,5 @@
 appname               = GateWeaver
-version               = 1
+version               = 0.2.0
 display_name          = GateWeaver 旁路由接管
 desc                  = 将指定局域网设备的网关引导至本机（旁路由），供上层做过滤/代理/分析；停止或卸载自动恢复。仅可用于您拥有或已获授权管理的网络设备。
 arch                  = x86_64 aarch64

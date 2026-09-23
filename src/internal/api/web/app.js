@@ -91,6 +91,7 @@ async function loadOverview() {
     $('#global-txt').textContent = ov.global_enabled ? '开启' : '关闭';
     let banner = '';
     if (!ov.upstream_ok) banner = '<div class="banner warn">上游网关不可达：已自动放开（fail-open），恢复后自动重接管。</div>';
+    else if (ov.clash && ov.clash.degraded) banner = '<div class="banner warn">Clash 不可达：' + (ov.clash.enabled ? '已降级为直连转发（Clash 恢复后自动重引流）。' : '') + '</div>';
     else if (ov.counts && ov.counts.enabled > 0 && !ov.global_enabled) banner = '<div class="banner info">存在启用中的目标，但全局开关关闭。</div>';
     $('#ov-banner').innerHTML = banner;
     // 本机（接管侧）MAC：被接管设备学到的"网关 MAC"就是它
@@ -106,11 +107,16 @@ async function loadOverview() {
         }
       }
     } catch {}
+    const cl = ov.clash || {};
+    const clashTxt = !cl.enabled ? '<span class="muted">未启用</span>'
+      : (cl.healthy ? `✓ 正常（探测 ${cl.addr||'本机'}:${cl.tcp_port}/${cl.dns_port}${cl.udp_port?` udp:${cl.udp_port}`:''}）`
+      : (cl.degraded ? '✗ 不可达（按策略已降级直连）' : '✗ 不可达'));
     $('#ov-gw').innerHTML = `
       <tr><td>IP</td><td>${ov.gateway.ip||'—'}</td><td>来源</td><td>${ov.gateway.source==='config'?'手动指定':'默认路由探测'}</td></tr>
       <tr><td>真实 MAC</td><td>${ov.gateway.known?ov.gateway.mac:'未知（探测中/失败）'}</td><td>健康</td><td>${ov.upstream_ok?'✓ 可达':'✗ 不可达'}</td></tr>
       ${nasRow}
-      <tr><td>送达模式</td><td colspan="3">${ov.forward_mode==='masquerade'?'地址伪装':'直连路由'}</td></tr>`;
+      <tr><td>Clash 引流</td><td colspan="3">${clashTxt}</td></tr>
+      <tr><td>送达模式</td><td colspan="3">${ov.forward_mode==='masquerade'?'地址伪装（仅直连路径）':'直连路由'}</td></tr>`;
     const tb = $('#ov-table tbody'); tb.innerHTML = '';
     for (const row of ov.targets) {
       const st = row.status || {};
@@ -146,11 +152,16 @@ async function loadIfaceSelect() {
 async function loadTargets() {
   loadIfaceSelect();
   const ts = await api('/targets');
+  const cfg = await api('/config');
+  const clashReady = cfg.clash_enabled;
   const tb = $('#tg-table tbody'); tb.innerHTML = '';
   for (const t of ts) {
     tb.insertAdjacentHTML('beforeend', `<tr>
       <td>${t.mac}</td><td>${t.ip}</td><td>${t.iface}</td>
       <td><input type="checkbox" class="tg-en" data-mac="${t.mac}" ${t.enabled?'checked':''}></td>
+      <td><select class="tg-path" data-mac="${t.mac}" ${clashReady?'':'title="请先在设置中启用 Clash 引流"'}>
+        <option value="direct" ${!t.via_clash?'selected':''}>直连转发</option>
+        <option value="clash" ${t.via_clash?'selected':''}>经 Clash</option></select></td>
       <td>${t.note||''}</td>
       <td><button class="ghost tg-del" data-mac="${t.mac}">删除</button></td></tr>`);
   }
@@ -163,6 +174,13 @@ async function loadTargets() {
     }
     go();
   }));
+  tb.querySelectorAll('.tg-path').forEach(sel => sel.addEventListener('change', async e => {
+    try {
+      await api('/targets/'+e.target.dataset.mac, {method:'PUT', body:{via_clash: e.target.value==='clash'}});
+      if (e.target.value==='clash' && !clashReady) alert('已记录选择，但 Clash 引流尚未在"设置"中启用');
+    } catch(err){ alert(err.message); }
+    loadTargets();
+  }));
   tb.querySelectorAll('.tg-del').forEach(b => b.addEventListener('click', async e => {
     if (!confirm('删除并恢复该设备？')) return;
     try { await api('/targets/'+e.target.dataset.mac, {method:'DELETE'}); } catch(err){ alert(err.message); }
@@ -172,7 +190,7 @@ async function loadTargets() {
 $('#tg-add').addEventListener('click', async () => {
   $('#tg-err').textContent='';
   try {
-    await api('/targets', {method:'POST', body:{mac:$('#tg-mac').value.trim(), ip:$('#tg-ip').value.trim(), iface:$('#tg-iface').value, enabled:$('#tg-enabled').checked, note:$('#tg-note').value.trim()}});
+    await api('/targets', {method:'POST', body:{mac:$('#tg-mac').value.trim(), ip:$('#tg-ip').value.trim(), iface:$('#tg-iface').value, enabled:$('#tg-enabled').checked, via_clash:$('#tg-path').value==='clash', note:$('#tg-note').value.trim()}});
     $('#tg-mac').value=$('#tg-ip').value=$('#tg-note').value='';
     loadTargets();
   } catch(e){ $('#tg-err').textContent=e.message; }
@@ -199,6 +217,9 @@ async function loadSettings() {
   $('#st-interval').value = c.inject_interval_sec; $('#st-rate').value = c.inject_rate_per_sec;
   $('#st-mode').value = c.forward_mode; $('#st-failopen').checked = c.fail_open;
   $('#st-port').value = c.port;
+  $('#st-clash-en').checked = c.clash_enabled; $('#st-clash-addr').value = c.clash_addr || '';
+  $('#st-clash-tcp').value = c.clash_tcp_port; $('#st-clash-dns').value = c.clash_dns_port;
+  $('#st-clash-udp').value = c.clash_udp_port || 0; $('#st-clash-fail').checked = c.clash_fail_direct;
 }
 $('#st-save').addEventListener('click', async () => {
   $('#st-err').textContent='';
@@ -206,7 +227,10 @@ $('#st-save').addEventListener('click', async () => {
     await api('/config', {method:'PUT', body:{
       gateway_ip: $('#st-gw').value.trim(), gateway_mac_fixed: $('#st-gwmac').value.trim(),
       inject_interval_sec: +$('#st-interval').value, inject_rate_per_sec: +$('#st-rate').value,
-      forward_mode: $('#st-mode').value, fail_open: $('#st-failopen').checked, port: +$('#st-port').value }});
+      forward_mode: $('#st-mode').value, fail_open: $('#st-failopen').checked, port: +$('#st-port').value,
+      clash_enabled: $('#st-clash-en').checked, clash_addr: $('#st-clash-addr').value.trim(),
+      clash_tcp_port: +$('#st-clash-tcp').value, clash_dns_port: +$('#st-clash-dns').value,
+      clash_udp_port: +$('#st-clash-udp').value, clash_fail_direct: $('#st-clash-fail').checked }});
     alert('已保存并热生效（端口变更需重启应用）');
   } catch(e){ $('#st-err').textContent=e.message; }
 });

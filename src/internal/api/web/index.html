@@ -76,12 +76,16 @@
   <section id="view-targets" class="view hidden">
     <div class="card">
       <h3>目标列表</h3>
-      <table id="tg-table"><thead><tr><th>MAC</th><th>IP</th><th>接口</th><th>启用</th><th>备注</th><th></th></tr></thead><tbody></tbody></table>
+      <table id="tg-table"><thead><tr><th>MAC</th><th>IP</th><th>接口</th><th>启用</th><th>路径</th><th>备注</th><th></th></tr></thead><tbody></tbody></table>
       <h3 class="mt">添加目标</h3>
       <div class="form-grid">
         <input id="tg-mac" placeholder="MAC，如 aa:bb:cc:dd:ee:ff">
         <input id="tg-ip" placeholder="IP，如 192.168.1.50">
         <select id="tg-iface"></select>
+        <select id="tg-path">
+          <option value="direct">路径：直连转发（原方案）</option>
+          <option value="clash">路径：经 Clash 引流</option>
+        </select>
         <input id="tg-note" placeholder="备注（可选）">
         <label class="chk"><input type="checkbox" id="tg-enabled"> 添加后立即启用</label>
         <button id="tg-add" class="primary">添加</button>
@@ -119,6 +123,17 @@
         </label>
         <label class="chk"><input type="checkbox" id="st-failopen"> 上游故障自动放开（推荐）</label>
         <label>管理台端口<input id="st-port" type="number"></label>
+      </div>
+      <h3 class="mt">Clash 引流（Clash 为独立应用，需自行开启 allow-lan 与对应端口）</h3>
+      <div class="form-grid">
+        <label class="chk"><input type="checkbox" id="st-clash-en"> 启用 Clash 引流</label>
+        <label>Clash 地址（留空=本机 REDIRECT；填 IP 则 DNAT/TPROXY，如 Docker bridge 容器）<input id="st-clash-addr" placeholder="留空或 172.17.0.2"></label>
+        <label>TCP 重定向端口 (redir-port)<input id="st-clash-tcp" type="number"></label>
+        <label>DNS 端口 (dns.listen)<input id="st-clash-dns" type="number"></label>
+        <label>UDP TPROXY 端口（0=关闭，UDP 走直连）<input id="st-clash-udp" type="number"></label>
+        <label class="chk"><input type="checkbox" id="st-clash-fail"> Clash 不可达时自动降级为直连（推荐）</label>
+      </div>
+      <div class="form-grid">
         <button id="st-save" class="primary">保存（端口/监听变更需重启应用）</button>
       </div>
       <p id="st-err" class="err"></p>
