@@ -12,6 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     strategy:
+      max-parallel: 1   # 串行上传，避免两架构同时改写同一 Release 造成 asset 丢失
       matrix:
         include:
           - arch: amd64
