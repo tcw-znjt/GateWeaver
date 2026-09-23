@@ -26,6 +26,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27"
+          cache-dependency-path: src/go.sum
 
       - name: Test
         run: cd src && go vet ./... && go test ./...

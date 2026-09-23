@@ -13,6 +13,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27"
+          cache-dependency-path: src/go.sum
       - name: Vet & test
         run: cd src && go vet ./... && go test -count=1 ./...
       - name: Cross-compile check
@@ -29,6 +30,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27"
+          cache-dependency-path: src/go.sum
       - name: Build fpk
         run: bash build.sh
       - uses: actions/upload-artifact@v4
