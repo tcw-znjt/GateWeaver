@@ -1,0 +1,5 @@
+#!/bin/bash
+# 升级前：停止旧进程（触发完整恢复序列），配置与日志保留于 TRIM_PKGVAR。
+cd "$(dirname "$0")" 2>/dev/null || true
+[ -f ./main ] && ./main stop
+exit 0

@@ -1,0 +1,13 @@
+#!/bin/bash
+# 安装前检查（fnos-app-package spec：失败即中止且不留系统改动）。
+LOG="${TRIM_PKGVAR}/info.log"
+say() { echo "$(date '+%F %T') - install_init: $1" >> "$LOG"; }
+
+say "开始安装前置检查"
+command -v ip >/dev/null       || { say "缺少 iproute2(ip)"; exit 1; }
+command -v iptables >/dev/null || { say "缺少 iptables"; exit 1; }
+command -v curl >/dev/null     || { say "缺少 curl"; exit 1; }
+id -u | grep -q '^0$'          || { say "需要 root 运行身份（privilege: run-as=root）"; exit 1; }
+ip route show default | grep -q '^default' || say "警告：当前无默认路由，接管将保持禁用直至网关可用"
+say "检查通过"
+exit 0

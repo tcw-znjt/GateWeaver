@@ -1,0 +1,98 @@
+#!/bin/bash
+# GateWeaver 服务生命周期：start / stop / status（应用中心调用）。
+# 守护进程自身在 SIGTERM 时完成接管撤销与系统还原；本脚本做兜底清理。
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+DATA_DIR="${TRIM_PKGVAR}/gwdata"
+GW_PORT="${GW_PORT:-9666}"
+
+# 二进制位置：优先 fnOS 注入的目标目录，多路径兜底
+resolve_bin() {
+  for cand in \
+    "${TRIM_PKGACT_PATH}/server/gateweaver" \
+    "${TRIM_PKGACT_PATH}/gateweaver" \
+    "/var/apps/GateWeaver/target/server/gateweaver" \
+    "${TRIM_PKGVAR}/../target/server/gateweaver"; do
+    if [ -x "$cand" ]; then echo "$cand"; return 0; fi
+  done
+  return 1
+}
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+check_process() {
+  kill -0 "$1" 2>/dev/null
+}
+
+status() {
+  if [ -f "${PID_FILE}" ]; then
+    pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    if [ -n "$pid" ] && check_process "$pid"; then
+      return 0
+    fi
+    rm -f "${PID_FILE}"
+  fi
+  return 1
+}
+
+start_process() {
+  if status; then return 0; fi
+  BIN=$(resolve_bin) || { log_msg "找不到 gateweaver 可执行文件"; return 1; }
+  mkdir -p "${DATA_DIR}/logs"
+  log_msg "启动守护进程 ${BIN}"
+  GW_DATA="${DATA_DIR}" bash -c "\"${BIN}\" -data \"${DATA_DIR}\"" >> "${LOG_FILE}" 2>&1 &
+  printf "%s" "$!" > "${PID_FILE}"
+  return 0
+}
+
+stop_process() {
+  log_msg "停止守护进程"
+  if [ -f "${PID_FILE}" ]; then
+    pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    if check_process "$pid"; then
+      log_msg "发送 TERM 信号至 PID:${pid}（触发接管撤销与恢复）"
+      kill -TERM "${pid}" 2>/dev/null
+      count=0
+      while check_process "$pid" && [ $count -lt 15 ]; do sleep 1; count=$((count+1)); done
+      if check_process "$pid"; then
+        log_msg "超时未退出，强制 KILL（目标设备将随 ARP 缓存老化自回正）"
+        kill -KILL "${pid}" 2>/dev/null
+      fi
+    fi
+    rm -f "${PID_FILE}"
+  fi
+  # 兜底：拆除本应用包过滤链与 sysctl 快照还原（幂等）
+  iptables -t filter -D FORWARD -j GW_FORWARD 2>/dev/null || true
+  iptables -t nat -D POSTROUTING -j GW_POSTROUTING 2>/dev/null || true
+  iptables -t filter -F GW_FORWARD 2>/dev/null || true
+  iptables -t nat -F GW_POSTROUTING 2>/dev/null || true
+  iptables -t filter -X GW_FORWARD 2>/dev/null || true
+  iptables -t nat -X GW_POSTROUTING 2>/dev/null || true
+  SNAP="${DATA_DIR}/config.json.sysctl.orig"
+  if [ -f "$SNAP" ]; then
+    while IFS='=' read -r key val; do
+      [ -n "$key" ] || continue
+      p="/proc/sys/$(echo "$key" | tr '.' '/')"
+      [ -w "$p" ] && echo "$val" > "$p" 2>/dev/null || true
+    done < "$SNAP"
+  fi
+  return 0
+}
+
+case $1 in
+start)
+  start_process
+  ;;
+stop)
+  stop_process
+  ;;
+status)
+  if status; then exit 0; else exit 3; fi
+  ;;
+*)
+  exit 1
+  ;;
+esac

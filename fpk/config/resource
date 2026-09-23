@@ -1,0 +1,18 @@
+{
+    "data-share":
+    {
+        "shares":
+        [
+            {
+                "name": "GateWeaver/data",
+                "permission":
+                {
+                    "rw":
+                    [
+                        "GateWeaver"
+                    ]
+                }
+            }
+        ]
+    }
+}

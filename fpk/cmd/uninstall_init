@@ -1,0 +1,5 @@
+#!/bin/bash
+# 卸载前：停止 + 撤销接管 + 还原 sysctl + 拆规则（复用 main stop）。
+cd "$(dirname "$0")" 2>/dev/null || true
+[ -f ./main ] && ./main stop
+exit 0

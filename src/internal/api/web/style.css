@@ -1,0 +1,43 @@
+:root {
+  --bg:#0f1419; --card:#171e26; --line:#232d38; --txt:#dfe7ee; --muted:#8494a3;
+  --acc:#3da9fc; --ok:#2ecc71; --warn:#f5a623; --err:#e05260; --danger:#c0392b;
+}
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+header { display:flex; align-items:center; justify-content:space-between; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:5; }
+.brand { font-size:18px; font-weight:700; color:var(--acc); }
+.brand .sub { font-size:12px; color:var(--muted); font-weight:400; margin-left:8px; }
+nav button { margin-left:6px; }
+main { max-width:1080px; margin:20px auto; padding:0 16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+.card.narrow { max-width:380px; margin:60px auto; }
+h2,h3 { margin:0 0 10px; font-weight:600; }
+.mt { margin-top:18px; }
+.hidden { display:none !important; }
+.muted { color:var(--muted); }
+.err { color:var(--err); min-height:1.2em; }
+input,select,button { font:inherit; color:var(--txt); background:#0c1116; border:1px solid var(--line); border-radius:6px; padding:7px 10px; }
+input:focus,select:focus { outline:1px solid var(--acc); }
+button { cursor:pointer; }
+button.primary { background:var(--acc); border-color:var(--acc); color:#04121f; font-weight:600; }
+button.danger { background:var(--danger); border-color:var(--danger); color:#fff; }
+button.ghost { background:transparent; }
+button.tab { background:transparent; border-color:var(--line); }
+button.tab.active { border-color:var(--acc); color:var(--acc); }
+table { width:100%; border-collapse:collapse; }
+th,td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-weight:500; }
+table.kv td:first-child { color:var(--muted); width:90px; }
+.form-grid { display:grid; gap:10px; max-width:560px; }
+.form-grid label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:13px; }
+.chk { flex-direction:row !important; align-items:center; gap:6px !important; color:var(--txt) !important; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.row.spread { justify-content:space-between; }
+.right { text-align:right; }
+.switch input { width:18px; height:18px; accent-color:var(--acc); }
+.banner { padding:8px 12px; border-radius:6px; margin-top:10px; }
+.banner.warn { background:#3a2a10; color:var(--warn); }
+.banner.info { background:#10283a; color:var(--acc); }
+.mask { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:10; }
+.mask .card { max-width:520px; }
+footer { text-align:center; padding:18px; font-size:12px; }

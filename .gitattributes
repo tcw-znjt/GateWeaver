@@ -1,0 +1,5 @@
+# 跨平台一致性：Shell 脚本与 Go/配置一律 LF（fnOS 上 CRLF 会破坏 shebang）
+* text=auto eol=lf
+*.png binary
+*.fpk binary
+*.exe binary

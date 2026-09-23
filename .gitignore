@@ -1,0 +1,25 @@
+# Go
+src/vendor/
+*.test
+*.out
+
+# 构建产物
+dist/
+build/
+
+# 打包工具二进制（fnpack 由 build.sh 自动获取，勿入库）
+tools/bin/
+
+# fnpack 工程内由 build.sh 生成的素材
+fpk/ICON.PNG
+fpk/ICON_256.PNG
+fpk/app/ui/images/
+
+# 调试二进制
+*.exe
+
+# 编辑器/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

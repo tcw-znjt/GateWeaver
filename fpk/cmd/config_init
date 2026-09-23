@@ -1,0 +1,3 @@
+#!/bin/bash
+# 用户在应用设置页修改环境变量前（GW_PORT/GW_KEEP_DATA 等）。
+exit 0

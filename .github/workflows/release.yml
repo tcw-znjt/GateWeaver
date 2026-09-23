@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            fnpack: fnpack-1.2.1-linux-amd64
+          - arch: arm64
+            fnpack: fnpack-1.2.1-linux-amd64   # fnpack 本身跑 x86_64，产出目标架构由 FPK_ARCH 决定
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Test
+        run: cd src && go vet ./... && go test ./...
+
+      - name: Build fpk (linux-${{ matrix.arch }})
+        run: |
+          VERSION="${VERSION#v}" bash build.sh
+        env:
+          FPK_ARCH: ${{ matrix.arch }}
+
+      - name: Upload fpk to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.fpk
+          draft: false
+          prerelease: false
+          body: |
+            GateWeaver ${{ github.ref_name }} —— 飞牛 fnOS 旁路由接管应用。
+
+            资产说明：
+            - `*.fpk`：fnOS 应用中心"手动安装"用的应用包（amd64 / arm64 各一）。
+            - 安装后请在管理台确认授权使用边界，仅用于您自有/已授权的网络设备。
+
+            构建与验收流程见 README。

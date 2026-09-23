@@ -1,0 +1,8 @@
+#!/bin/bash
+# 卸载后清理。GW_KEEP_DATA=1（应用设置环境变量）可保留数据目录以便重装恢复。
+if [ "${GW_KEEP_DATA:-0}" = "1" ]; then
+  echo "$(date '+%F %T') - uninstall_callback: 保留 ${TRIM_PKGVAR}/gwdata" >> "${TRIM_PKGVAR}/info.log"
+else
+  rm -rf "${TRIM_PKGVAR}/gwdata"
+fi
+exit 0

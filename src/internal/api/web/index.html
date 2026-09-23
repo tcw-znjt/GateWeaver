@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GateWeaver · 旁路由接管</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">GateWeaver <span class="sub">飞牛旁路由接管</span></div>
+  <nav id="nav" class="hidden">
+    <button data-view="overview" class="tab active">总览</button>
+    <button data-view="targets" class="tab">目标管理</button>
+    <button data-view="discover" class="tab">设备发现</button>
+    <button data-view="settings" class="tab">设置</button>
+    <button data-view="logs" class="tab">日志</button>
+    <button id="logout" class="ghost">退出</button>
+  </nav>
+</header>
+
+<main id="app">
+  <!-- 登录 / 初始化 -->
+  <section id="view-auth" class="view">
+    <div class="card narrow">
+      <h2 id="auth-title">登录</h2>
+      <p id="auth-hint" class="muted"></p>
+      <input id="auth-pw" type="password" placeholder="管理口令" autocomplete="current-password">
+      <input id="auth-pw2" type="password" placeholder="确认口令（首次设置）" class="hidden">
+      <button id="auth-btn" class="primary">登录</button>
+      <p id="auth-err" class="err"></p>
+    </div>
+  </section>
+
+  <!-- 授权声明 -->
+  <div id="license-mask" class="mask hidden">
+    <div class="card">
+      <h2>使用边界声明</h2>
+      <p>GateWeaver 通过 ARP 通告使 <b>指定</b> 局域网设备的默认网关指向本机（旁路由）。
+      您确认并承诺：仅对 <b>您拥有或已获明确授权管理</b> 的网络与设备使用该功能；
+      对他人网络设备使用 ARP 欺骗在多数司法辖区违法。</p>
+      <p class="muted">建议：接管期间保留"一键恢复"入口；上游故障时应用会自动放开。</p>
+      <label class="chk"><input type="checkbox" id="license-chk"> 我已阅读并确认仅在自有/授权网络中使用</label>
+      <div class="row">
+        <button id="license-ok" class="primary" disabled>确认并开始</button>
+        <button id="license-no" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 总览 -->
+  <section id="view-overview" class="view hidden">
+    <div class="card">
+      <div class="row spread">
+        <div>
+          <h3>全局接管开关</h3>
+          <label class="switch"><input type="checkbox" id="global-sw"><span id="global-txt">关闭</span></label>
+        </div>
+        <div class="right">
+          <button id="recover-all" class="danger">一键恢复全部</button>
+        </div>
+      </div>
+      <div id="ov-banner"></div>
+    </div>
+    <div class="card">
+      <h3>上游网关</h3>
+      <table class="kv"><tbody id="ov-gw"></tbody></table>
+    </div>
+    <div class="card">
+      <h3>目标状态</h3>
+      <table id="ov-table"><thead><tr><th>MAC</th><th>IP</th><th>接口</th><th>状态</th><th>最近注入</th><th>观测包/字节</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- 目标管理 -->
+  <section id="view-targets" class="view hidden">
+    <div class="card">
+      <h3>目标列表</h3>
+      <table id="tg-table"><thead><tr><th>MAC</th><th>IP</th><th>接口</th><th>启用</th><th>备注</th><th></th></tr></thead><tbody></tbody></table>
+      <h3 class="mt">添加目标</h3>
+      <div class="form-grid">
+        <input id="tg-mac" placeholder="MAC，如 aa:bb:cc:dd:ee:ff">
+        <input id="tg-ip" placeholder="IP，如 192.168.1.50">
+        <select id="tg-iface"></select>
+        <input id="tg-note" placeholder="备注（可选）">
+        <label class="chk"><input type="checkbox" id="tg-enabled"> 添加后立即启用</label>
+        <button id="tg-add" class="primary">添加</button>
+      </div>
+      <p id="tg-err" class="err"></p>
+    </div>
+  </section>
+
+  <!-- 发现 -->
+  <section id="view-discover" class="view hidden">
+    <div class="card">
+      <h3>局域网设备</h3>
+      <div class="row">
+        <button id="dc-refresh" class="primary">读取邻居表</button>
+        <input id="dc-cidr" placeholder="可选 CIDR 主动探测，如 192.168.1.0/24">
+      </div>
+      <table id="dc-table"><thead><tr><th>IP</th><th>MAC</th><th>接口</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="view-settings" class="view hidden">
+    <div class="card">
+      <h3>接管参数</h3>
+      <div class="form-grid">
+        <label>上游网关 IP（留空=自动探测）<input id="st-gw" placeholder="192.168.1.1"></label>
+        <label>固定网关 MAC（可选）<input id="st-gwmac"></label>
+        <label>重申间隔（秒）<input id="st-interval" type="number" min="1" max="3600"></label>
+        <label>每目标限速（帧/秒）<input id="st-rate" type="number" min="1" max="10"></label>
+        <label>送达模式
+          <select id="st-mode">
+            <option value="route">直连路由（保留源 IP）</option>
+            <option value="masquerade">地址伪装（兼容反向路径过滤）</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="st-failopen"> 上游故障自动放开（推荐）</label>
+        <label>管理台端口<input id="st-port" type="number"></label>
+        <button id="st-save" class="primary">保存（端口/监听变更需重启应用）</button>
+      </div>
+      <p id="st-err" class="err"></p>
+      <p class="muted">修改模式：对上游主路由开启 uRPF/防欺骗时选"地址伪装"，否则保持"直连路由"。</p>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <section id="view-logs" class="view hidden">
+    <div class="card">
+      <div class="row spread"><h3>事件与审计</h3><button id="lg-refresh" class="ghost">刷新</button></div>
+      <table id="lg-table"><thead><tr><th>时间</th><th>类型</th><th>目标</th><th>来源</th><th>消息</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+</main>
+
+<footer class="muted">GateWeaver —— 自有网络旁路由工具。停用/卸载将自动恢复网络原状。</footer>
+<script src="app.js"></script>
+</body>
+</html>

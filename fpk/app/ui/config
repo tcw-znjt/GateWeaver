@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "GateWeaver.Application": {
+            "title": "GateWeaver",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "",
+            "port": "9666",
+            "url": "/",
+            "allUsers": false
+        }
+    }
+}
