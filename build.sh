@@ -11,6 +11,7 @@ mkdir -p dist build
 
 echo "==> 1/4 图标"
 ( cd src && go run ./cmd/genicon ../dist )
+mkdir -p fpk/app/ui/images
 cp -f dist/ICON_256.PNG fpk/ICON_256.PNG
 cp -f dist/ICON.png     fpk/ICON.PNG
 cp -f dist/ICON_256.PNG fpk/app/ui/images/icon_256.png
