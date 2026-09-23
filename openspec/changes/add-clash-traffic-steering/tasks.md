@@ -19,4 +19,4 @@
 ## 4. 验证与发布
 
 - [x] 4.1 全量 vet + 单测 + 双架构交叉编译 + 本地 fnpack 出包通过
-- [ ] 4.2 提交推送、打 tag v0.2.0、CI/Release 全绿且 Release 含双架构 .fpk
+- [x] 4.2 提交推送、打 tag v0.2.0、CI/Release 全绿且 Release 含双架构 .fpk
