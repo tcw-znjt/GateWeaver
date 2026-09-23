@@ -271,7 +271,7 @@ func (a *App) Gateway() netip.Addr {
 	return a.gwIP
 }
 
-// Interfaces 返回本机接口与地址（管理台选择目标接口/监听地址）。
-func (a *App) Interfaces() (map[string][]netip.Prefix, error) {
+// Interfaces 返回本机接口与地址/MAC（管理台选择目标接口、展示接管侧 MAC）。
+func (a *App) Interfaces() (map[string]probe.IfaceInfo, error) {
 	return a.Probe.Addrs()
 }

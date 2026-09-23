@@ -57,6 +57,8 @@ func (r *apiRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 		return []byte("192.168.1.1 dev eth0 lladdr de:ad:be:ef:00:01 REACHABLE\n192.168.1.77 dev eth0 lladdr 77:77:77:77:77:77 REACHABLE\n"), nil
 	case name == "ip" && strings.Contains(line, "addr show"):
 		return []byte("1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 192.168.1.10/24 brd + scope global eth0\n"), nil
+	case name == "ip" && strings.Contains(line, "link show"):
+		return []byte("1: lo: <LOOPBACK> mtu 65536 state UNKNOWN link/loopback 00:00:00:00:00:00\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500 state UP link/ether aa:aa:aa:aa:aa:01 brd ff:ff:ff:ff:ff:ff\n"), nil
 	case name == "ping" || name == "arping":
 		return nil, nil
 	default: // iptables / cat / sh -c 等一律成功
@@ -337,5 +339,36 @@ func TestEventsAudit(t *testing.T) {
 	}
 	if !foundAdd || !foundAck {
 		t.Fatalf("audit entries missing: %+v", evs)
+	}
+}
+
+// /api/interfaces 暴露本机接口 MAC（接管侧"网关 MAC"可观测）
+func TestInterfacesEndpoint(t *testing.T) {
+	h, _, _ := newHarness(t)
+	_, _ = h.call("POST", "/api/setup", "", map[string]string{"password": "testpass123"})
+	tok := h.login(t, "testpass123")
+	req, _ := http.NewRequest("GET", h.srv.URL+"/api/interfaces", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var ifs map[string]struct {
+		MAC   string   `json:"mac"`
+		Addrs []string `json:"addrs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ifs); err != nil {
+		t.Fatal(err)
+	}
+	eth, ok := ifs["eth0"]
+	if !ok {
+		t.Fatalf("eth0 missing: %+v", ifs)
+	}
+	if eth.MAC != "aa:aa:aa:aa:aa:01" {
+		t.Fatalf("eth0 mac = %q", eth.MAC)
+	}
+	if len(eth.Addrs) != 1 || eth.Addrs[0] != "192.168.1.10/24" {
+		t.Fatalf("eth0 addrs = %v", eth.Addrs)
 	}
 }

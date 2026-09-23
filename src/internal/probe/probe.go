@@ -56,15 +56,54 @@ func (res *Resolver) DefaultRoute() (netip.Addr, string, error) {
 	return a, dev, err
 }
 
-// Addrs 返回接口 → 该接口 IPv4 CIDR 列表（供管理台选择监听地址与接口范围校验）。
-func (res *Resolver) Addrs() (map[string][]netip.Prefix, error) {
+// IfaceInfo 接口的二层/三层信息（MAC 即目标设备被接管后学到的"网关 MAC"）。
+type IfaceInfo struct {
+	MAC   string         `json:"mac"`
+	Addrs []netip.Prefix `json:"addrs"`
+}
+
+// Addrs 返回接口名 → {MAC, IPv4 前缀列表}（管理台展示本机接管接口 MAC 与选择监听地址）。
+func (res *Resolver) Addrs() (map[string]IfaceInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := res.r.Run(ctx, "ip", "-o", "addr", "show")
+	outAddr, err := res.r.Run(ctx, "ip", "-o", "addr", "show")
 	if err != nil {
 		return nil, err
 	}
-	return parseAddrShow(string(out))
+	byIface, _ := parseAddrShow(string(outAddr))
+	out := make(map[string]IfaceInfo, len(byIface))
+	for iface, ps := range byIface {
+		out[iface] = IfaceInfo{Addrs: ps}
+	}
+	// link 信息尽力而为：失败不致命（仅缺 MAC）
+	if outLink, err := res.r.Run(ctx, "ip", "-o", "link", "show"); err == nil {
+		for iface, mac := range parseLinkShow(string(outLink)) {
+			info := out[iface]
+			info.MAC = mac
+			out[iface] = info
+		}
+	}
+	return out, nil
+}
+
+// parseLinkShow 解析 `ip -o link show` 行：
+// "2: eth0: <BROADCAST,...> mtu 1500 ... link/ether aa:bb:cc:dd:ee:ff brd ..."
+func parseLinkShow(out string) map[string]string {
+	res := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		iface := strings.TrimSuffix(fields[1], ":")
+		for i, f := range fields {
+			if f == "link/ether" && i+1 < len(fields) {
+				res[iface] = fields[i+1]
+				break
+			}
+		}
+	}
+	return res
 }
 
 // parseAddrShow 解析 `ip -o addr show` 行：

@@ -17,6 +17,8 @@ async function api(path, opts = {}) {
 }
 
 function fmtTime(t) { return t ? new Date(t).toLocaleString('zh-CN', {hour12:false}) : '—'; }
+function ipToInt(s){ const p=s.split('.'); return ((+p[0]<<24)|(+p[1]<<16)|(+p[2]<<8)|+p[3])>>>0; }
+function inCidr(ip, base, bits){ const m = bits===0?0:((-1)<<(32-bits))>>>0; return (ipToInt(ip)&m)===(ipToInt(base)&m); }
 const stateZh = {disabled:'未启用', injecting:'注入中', active:'已生效 ✓', no_traffic:'未见流量（可能被静态ARP/防护）'};
 
 // ---------- 视图切换 ----------
@@ -91,9 +93,23 @@ async function loadOverview() {
     if (!ov.upstream_ok) banner = '<div class="banner warn">上游网关不可达：已自动放开（fail-open），恢复后自动重接管。</div>';
     else if (ov.counts && ov.counts.enabled > 0 && !ov.global_enabled) banner = '<div class="banner info">存在启用中的目标，但全局开关关闭。</div>';
     $('#ov-banner').innerHTML = banner;
+    // 本机（接管侧）MAC：被接管设备学到的"网关 MAC"就是它
+    let nasRow = '';
+    try {
+      const ifs = await api('/interfaces');
+      for (const [name, info] of Object.entries(ifs)) {
+        for (const cidr of (info.addrs||[])) {
+          const [base, bits] = cidr.split('/');
+          if (ov.gateway.ip && inCidr(ov.gateway.ip, base, +bits)) {
+            nasRow = `<tr><td>本机 ${name}</td><td>${info.mac||'?'}</td><td colspan="2" class="muted">目标设备学到的网关 MAC（NAS 自身）</td></tr>`;
+          }
+        }
+      }
+    } catch {}
     $('#ov-gw').innerHTML = `
       <tr><td>IP</td><td>${ov.gateway.ip||'—'}</td><td>来源</td><td>${ov.gateway.source==='config'?'手动指定':'默认路由探测'}</td></tr>
       <tr><td>真实 MAC</td><td>${ov.gateway.known?ov.gateway.mac:'未知（探测中/失败）'}</td><td>健康</td><td>${ov.upstream_ok?'✓ 可达':'✗ 不可达'}</td></tr>
+      ${nasRow}
       <tr><td>送达模式</td><td colspan="3">${ov.forward_mode==='masquerade'?'地址伪装':'直连路由'}</td></tr>`;
     const tb = $('#ov-table tbody'); tb.innerHTML = '';
     for (const row of ov.targets) {
@@ -123,7 +139,7 @@ let ifaceList = [];
 async function loadIfaceSelect() {
   try {
     ifaceList = await api('/interfaces');
-    const opts = Object.keys(ifaceList).map(i=>`<option value="${i}">${i}</option>`).join('');
+    const opts = Object.entries(ifaceList).map(([i, info]) => `<option value="${i}">${i}${info.mac?' · '+info.mac:''}</option>`).join('');
     $('#tg-iface').innerHTML = opts || '<option value="eth0">eth0</option>';
   } catch { $('#tg-iface').innerHTML = '<option value="eth0">eth0</option>'; }
 }

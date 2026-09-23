@@ -91,8 +91,8 @@ func (s *Server) Listen(ctx context.Context) error {
 		if a == "auto" {
 			ifs, err := s.app.Interfaces()
 			if err == nil {
-				for _, ps := range ifs {
-					for _, p := range ps {
+				for _, info := range ifs {
+					for _, p := range info.Addrs {
 						if p.Addr().Is4() && !p.Addr().IsLoopback() {
 							addrs = append(addrs, p.Addr().String())
 						}
