@@ -28,19 +28,19 @@
 - 上游网关显示（自动探测/手动固定）、送达模式、注入间隔与限速、fail-open 开关
 - 事件与审计日志；首次使用授权声明确认
 
-## 配合 Clash 使用（可选，v0.2+）
+## 配合 Clash 使用（TUN 全局接管模型，v0.3+）
 
-Clash 作为**独立应用**安装（fnOS 商店或 Docker 均可），GateWeaver 负责把"经 Clash"设备的流量改道给它：
+推荐架构：Clash.Meta 以 **root + TUN 全局接管** 运行（用 `tools/fork-clash-meta/` 一键重打包
+qiyueqixi/clash-meta），被接管设备的流量与 NAS 本地流量走同一条路进 Clash——与旧 OpenWrt +
+OpenClash 体验一致，无需 redir/tproxy 端口：
 
-1. Clash 侧要求：`allow-lan: true`，开启 `redir-port`（TCP，如 7893）与 `dns.listen`（如 :7874，
-   建议 `enhanced-mode: fake-ip`，并把 fnOS/内网网段加入 `fake-ip-filter`）；需 UDP 全量改道再开
-   `tproxy-port`（如 7895）。Docker bridge 部署时记下容器 IP 填到"Clash 地址"。
-2. GateWeaver 设置页 → Clash 引流：勾选启用、填端口/地址。
-3. 目标管理：每台设备可单独选 **直连转发**（原方案，仅旁路到 NAS 后走主路由）或 **经 Clash**。
-4. Clash 进程停止/端口不可达时，"经 Clash"设备自动降级为直连转发（可关），恢复后自动重引流。
-
-原理：对目标设备下发 `PREROUTING` REDIRECT/DNAT（TCP+DNS53）与可选 TPROXY（UDP，fwmark 策略路由），
-私网目的（RFC1918）自动绕行不影响访问 NAS/内网服务。注意此方案仅代理**经接管**的设备；未接管设备不受影响。
+1. 按 `tools/fork-clash-meta/README.md` 安装 root+TUN 版 clash-meta；`ip route show default`
+   应显示默认路由 `dev tun`。
+2. GateWeaver 设置 → "TUN 接管守护"：开启，接口名/controller 与 Clash 实际一致（默认 `tun`、
+   `127.0.0.1:19090`）。
+3. 目标管理添加设备并启用全局开关：设备流量 → NAS → tun → Clash 分流。
+4. **故障保护**：Clash 挂掉/TUN 路由丢失 → TunGuard 自动撤销全部 ARP 引导（设备直连真网关，
+   断墙不断网）；Clash 恢复 → 自动重新引导。关闭守护开关则退回纯转发模型（v0.1.1 行为）。
 
 ## 限制
 

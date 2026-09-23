@@ -304,7 +304,7 @@ type overview struct {
 	ForwardMode   string                 `json:"forward_mode"`
 	Gateway       gatewayView            `json:"gateway"`
 	UpstreamOK    bool                   `json:"upstream_ok"`
-	Clash         app.ClashStateView     `json:"clash"`
+	Tun           app.TunStateView       `json:"tun"`
 	Targets       []any                  `json:"targets"`
 	Counts        map[string]int         `json:"counts"`
 }
@@ -343,7 +343,7 @@ func (s *Server) hOverview(w http.ResponseWriter, r *http.Request, actor string)
 		ForwardMode: string(cfg.ForwardMode),
 		Gateway:     gatewayView{IP: s.app.Gateway().String(), MAC: gwm.String(), Known: gwok, Source: src},
 		UpstreamOK:  s.app.UpstreamOK(),
-		Clash:       s.app.ClashState(),
+		Tun:         s.app.TunState(),
 		Targets:     targets, Counts: counts,
 	})
 }
@@ -363,12 +363,10 @@ func (s *Server) hPutConfig(w http.ResponseWriter, r *http.Request, actor string
 		ForwardMode       *string   `json:"forward_mode"`
 		Port              *int      `json:"port"`
 		ListenAddrs       *[]string `json:"listen_addrs"`
-		ClashEnabled      *bool     `json:"clash_enabled"`
-		ClashAddr         *string   `json:"clash_addr"`
-		ClashTCPPort      *int      `json:"clash_tcp_port"`
-		ClashDNSPort      *int      `json:"clash_dns_port"`
-		ClashUDPPort      *int      `json:"clash_udp_port"`
-		ClashFailDirect   *bool     `json:"clash_fail_direct"`
+		TunGuardEnabled   *bool     `json:"tun_guard_enabled"`
+		TunIface          *string   `json:"tun_iface"`
+		ControllerAddr    *string   `json:"controller_addr"`
+		TunFailWithdraw   *bool     `json:"tun_fail_withdraw"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, 400, err)
@@ -404,23 +402,17 @@ func (s *Server) hPutConfig(w http.ResponseWriter, r *http.Request, actor string
 		if body.ListenAddrs != nil {
 			c.ListenAddrs = *body.ListenAddrs
 		}
-		if body.ClashEnabled != nil {
-			c.ClashEnabled = *body.ClashEnabled
+		if body.TunGuardEnabled != nil {
+			c.TunGuardEnabled = *body.TunGuardEnabled
 		}
-		if body.ClashAddr != nil {
-			c.ClashAddr = *body.ClashAddr
+		if body.TunIface != nil {
+			c.TunIface = *body.TunIface
 		}
-		if body.ClashTCPPort != nil {
-			c.ClashTCPPort = *body.ClashTCPPort
+		if body.ControllerAddr != nil {
+			c.ControllerAddr = *body.ControllerAddr
 		}
-		if body.ClashDNSPort != nil {
-			c.ClashDNSPort = *body.ClashDNSPort
-		}
-		if body.ClashUDPPort != nil {
-			c.ClashUDPPort = *body.ClashUDPPort
-		}
-		if body.ClashFailDirect != nil {
-			c.ClashFailDirect = *body.ClashFailDirect
+		if body.TunFailWithdraw != nil {
+			c.TunFailWithdraw = *body.TunFailWithdraw
 		}
 		return nil
 	})
@@ -492,11 +484,10 @@ func (s *Server) hAddTarget(w http.ResponseWriter, r *http.Request, actor string
 func (s *Server) hUpdateTarget(w http.ResponseWriter, r *http.Request, actor string) {
 	mac := r.PathValue("mac")
 	var body struct {
-		Enabled  *bool   `json:"enabled"`
-		ViaClash *bool   `json:"via_clash"`
-		IP       *string `json:"ip"`
-		Iface    *string `json:"iface"`
-		Note     *string `json:"note"`
+		Enabled *bool   `json:"enabled"`
+		IP      *string `json:"ip"`
+		Iface   *string `json:"iface"`
+		Note    *string `json:"note"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, 400, err)
@@ -507,9 +498,6 @@ func (s *Server) hUpdateTarget(w http.ResponseWriter, r *http.Request, actor str
 			if strings.EqualFold(c.Targets[i].MAC, mac) {
 				if body.Enabled != nil {
 					c.Targets[i].Enabled = *body.Enabled
-				}
-				if body.ViaClash != nil {
-					c.Targets[i].ViaClash = *body.ViaClash
 				}
 				if body.IP != nil {
 					c.Targets[i].IP = *body.IP

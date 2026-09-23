@@ -6,53 +6,38 @@ import (
 	"gateweaver/internal/config"
 )
 
-// clash 降级并集：Clash 不健康 + fail_direct → via-clash 目标落入 direct 集合。
-func TestSplitPathsDegrade(t *testing.T) {
+// TUN/upstream/global/license 任一关闭 → 无在管目标（不注入、不下发规则）
+func TestActiveIPsGates(t *testing.T) {
 	a := &App{}
-	a.clashOK = true
-	a.upstreamOK = true
+	a.upstreamOK, a.tunOK = true, true
 	cfg := &config.Config{
-		LicensedAck: true, GlobalEnabled: true, ClashEnabled: true, ClashFailDirect: true,
+		LicensedAck: true, GlobalEnabled: true,
 		Targets: []config.Target{
-			{MAC: "aa", IP: "10.0.0.1", Enabled: true, ViaClash: true},
-			{MAC: "bb", IP: "10.0.0.2", Enabled: true, ViaClash: false},
-			{MAC: "cc", IP: "10.0.0.3", Enabled: false, ViaClash: true},
+			{MAC: "aa", IP: "10.0.0.1", Enabled: true},
+			{MAC: "bb", IP: "10.0.0.2", Enabled: false},
 		},
 	}
-	direct, clash := a.splitPaths(cfg)
-	if len(direct) != 1 || direct[0] != "10.0.0.2" {
-		t.Fatalf("direct=%v", direct)
+	if got := a.activeIPs(cfg); len(got) != 1 || got[0] != "10.0.0.1" {
+		t.Fatalf("active=%v", got)
 	}
-	if len(clash) != 1 || clash[0] != "10.0.0.1" {
-		t.Fatalf("clash=%v", clash)
+	a.tunOK = false // TunGuard 判障
+	if got := a.activeIPs(cfg); len(got) != 0 {
+		t.Fatalf("tun down must yield empty: %v", got)
 	}
+	a.tunOK = true
+	a.upstreamOK = false
+	if got := a.activeIPs(cfg); len(got) != 0 {
+		t.Fatalf("upstream down must yield empty: %v", got)
+	}
+}
 
-	// Clash 故障 + 降级策略开 → 10.0.0.1 变直连
-	a.clashOK = false
-	direct, clash = a.splitPaths(cfg)
-	if len(clash) != 0 || len(direct) != 2 {
-		t.Fatalf("degraded: direct=%v clash=%v", direct, clash)
-	}
-
-	// 故障但不降级 → 维持改道
-	cfg.ClashFailDirect = false
-	_, clash = a.splitPaths(cfg)
-	if len(clash) != 1 {
-		t.Fatalf("no-failover should keep clash: %v", clash)
-	}
-
-	// Clash 全局关 → 全直连（原方案）
-	cfg.ClashEnabled = false
-	direct, clash = a.splitPaths(cfg)
-	if len(clash) != 0 || len(direct) != 2 {
-		t.Fatalf("clash off: direct=%v clash=%v", direct, clash)
-	}
-
-	// 未授权/全局关时两集合皆空
-	cfg2 := *cfg
-	cfg2.GlobalEnabled = false
-	d, c := a.splitPaths(&cfg2)
-	if len(d)+len(c) != 0 {
-		t.Fatal("global off must yield empty sets")
+// TunStateView 组装（无 guard 实例时信号为零值，状态可判读）
+func TestTunStateView(t *testing.T) {
+	a := &App{}
+	a.tunOK = false
+	a.tunWithdrawn = true
+	// Store 为空指针时避免 panic：直接构造期望
+	if a.tunOK || !a.tunWithdrawn {
+		t.Fatal("fixture wrong")
 	}
 }

@@ -20,3 +20,5 @@
 
 - [x] 4.1 全量 vet + 单测 + 双架构交叉编译 + 本地 fnpack 出包通过
 - [x] 4.2 提交推送、打 tag v0.2.0、CI/Release 全绿且 Release 含双架构 .fpk
+
+> **已作废（superseded）**：本变更（v0.2 REDIRECT 逐设备引流）被 `switch-to-tun-global-steering`（v0.3 TUN 全局接管）取代，保留仅作历史记录。

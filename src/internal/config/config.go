@@ -22,12 +22,11 @@ const (
 
 // Target 一个接管目标。MAC 为主键（IP 可能因 DHCP 变化）。
 type Target struct {
-	MAC      string `json:"mac"`
-	IP       string `json:"ip"`
-	Iface    string `json:"iface"`
-	Enabled  bool   `json:"enabled"`
-	ViaClash bool   `json:"via_clash"` // true=流量改道 Clash；false=直连转发（原方案）
-	Note     string `json:"note,omitempty"`
+	MAC     string `json:"mac"`
+	IP      string `json:"ip"`
+	Iface   string `json:"iface"`
+	Enabled bool   `json:"enabled"`
+	Note    string `json:"note,omitempty"`
 }
 
 // Config 全局配置。
@@ -49,13 +48,12 @@ type Config struct {
 	// 转发
 	ForwardMode ForwardMode `json:"forward_mode"` // route | masquerade
 
-	// Clash 引流（Clash 为独立应用，本应用只改道流量）
-	ClashEnabled    bool   `json:"clash_enabled"`
-	ClashAddr       string `json:"clash_addr"`       // 空 = 本机 REDIRECT；否则 DNAT/TPROXY 到该 IP（如 Docker bridge 容器）
-	ClashTCPPort    int    `json:"clash_tcp_port"`   // Clash redir-port
-	ClashDNSPort    int    `json:"clash_dns_port"`   // Clash dns.listen 端口
-	ClashUDPPort    int    `json:"clash_udp_port"`   // Clash tproxy-port，0 = 关闭 UDP 改道
-	ClashFailDirect bool   `json:"clash_fail_direct"` // Clash 不可达时自动降级直连（默认开）
+	// TUN 全局接管守护（tun-transit-guard）：TUN 路由 + Clash controller 双探测，
+	// 失效时撤销全部引导（设备直连真网关），恢复后自动重引导。
+	TunGuardEnabled   bool   `json:"tun_guard_enabled"`
+	TunIface          string `json:"tun_iface"`           // mihomo TUN 接口名（默认 tun）
+	ControllerAddr    string `json:"controller_addr"`     // mihomo external-controller 地址
+	TunFailWithdraw   bool   `json:"tun_fail_withdraw"`   // 判障时自动撤销引导
 
 	// 管理台
 	ListenAddrs []string `json:"listen_addrs"` // 默认 ["127.0.0.1:9666"]
@@ -75,10 +73,10 @@ func Default() *Config {
 		InjectIntervalSec:      20,
 		InjectRatePerSec:       2,
 		ForwardMode:            ModeRoute,
-		ClashTCPPort:           7893,
-		ClashDNSPort:           7874,
-		ClashUDPPort:           0,
-		ClashFailDirect:        true,
+		TunGuardEnabled:        true,
+		TunIface:               "tun",
+		ControllerAddr:         "127.0.0.1:19090",
+		TunFailWithdraw:        true,
 		Port:                   9666,
 		ListenAddrs:            []string{"127.0.0.1", "auto"}, // auto = 全部非回环 IPv4（LAN）接口地址
 	}
@@ -101,20 +99,13 @@ func (c *Config) Validate(gwIP netip.Addr) error {
 	if c.Port < 1 || c.Port > 65535 {
 		return errors.New("bad port")
 	}
-	if c.ClashAddr != "" {
-		if a, err := netip.ParseAddr(c.ClashAddr); err != nil || !a.Is4() {
-			return fmt.Errorf("clash_addr %q must be an IPv4", c.ClashAddr)
+	if c.TunGuardEnabled {
+		if c.TunIface == "" || len(c.TunIface) > 15 {
+			return errors.New("tun_iface must be a non-empty ifname (<=15 chars)")
 		}
-	}
-	if c.ClashEnabled {
-		if c.ClashTCPPort < 1 || c.ClashTCPPort > 65535 {
-			return errors.New("clash_tcp_port out of range")
-		}
-		if c.ClashDNSPort < 1 || c.ClashDNSPort > 65535 {
-			return errors.New("clash_dns_port out of range")
-		}
-		if c.ClashUDPPort < 0 || c.ClashUDPPort > 65535 {
-			return errors.New("clash_udp_port out of range")
+		host, port, err := net.SplitHostPort(c.ControllerAddr)
+		if err != nil || host == "" || port == "" {
+			return fmt.Errorf("controller_addr %q must be host:port", c.ControllerAddr)
 		}
 	}
 	seen := map[string]bool{}

@@ -59,6 +59,8 @@ func (r *apiRunner) Run(ctx context.Context, name string, args ...string) ([]byt
 		return []byte("1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 192.168.1.10/24 brd + scope global eth0\n"), nil
 	case name == "ip" && strings.Contains(line, "link show"):
 		return []byte("1: lo: <LOOPBACK> mtu 65536 state UNKNOWN link/loopback 00:00:00:00:00:00\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500 state UP link/ether aa:aa:aa:aa:aa:01 brd ff:ff:ff:ff:ff:ff\n"), nil
+	case name == "ip" && strings.Contains(line, "route get"):
+		return []byte("223.5.5.5 dev tun0 table 2022 src 192.168.1.10 uid 0\n"), nil
 	case name == "ping" || name == "arping":
 		return nil, nil
 	default: // iptables / cat / sh -c 等一律成功
@@ -373,44 +375,33 @@ func TestInterfacesEndpoint(t *testing.T) {
 	}
 }
 
-// clash-steering 2.2：Clash 配置、via_clash 热更新、overview 状态
-func TestClashConfigAndTargets(t *testing.T) {
+// tun-steering 2.2：TUN 守护配置字段与 overview 状态
+func TestTunConfigAndOverview(t *testing.T) {
 	h, store, _ := newHarness(t)
 	_, _ = h.call("POST", "/api/setup", "", map[string]string{"password": "testpass123"})
 	tok := h.login(t, "testpass123")
 
-	// 非法 Clash 地址被拒且不落盘
-	resp, _ := h.call("PUT", "/api/config", tok, map[string]any{"clash_enabled": true, "clash_addr": "not-an-ip"})
+	// 非法 controller_addr 被拒不落盘
+	resp, _ := h.call("PUT", "/api/config", tok, map[string]any{"tun_guard_enabled": true, "controller_addr": "bad"})
 	if resp.StatusCode != 400 {
-		t.Fatal("bad clash_addr must 400")
+		t.Fatal("bad controller_addr must 400")
 	}
-	if store.Snapshot().ClashEnabled {
-		t.Fatal("rejected update must not persist")
+	if store.Snapshot().ControllerAddr == "bad" {
+		t.Fatal("rejected value persisted")
 	}
-	// 合法配置
+	// 合法更新（接口名/controller）
 	if resp, _ := h.call("PUT", "/api/config", tok, map[string]any{
-		"clash_enabled": true, "clash_addr": "", "clash_tcp_port": 7893, "clash_dns_port": 7874}); resp.StatusCode != 200 {
-		t.Fatal("valid clash config failed")
+		"tun_guard_enabled": true, "tun_iface": "utun", "controller_addr": "127.0.0.1:9090", "tun_fail_withdraw": true}); resp.StatusCode != 200 {
+		t.Fatalf("tun config update failed: %v", resp)
 	}
 	c := store.Snapshot()
-	if !c.ClashEnabled || c.ClashTCPPort != 7893 {
-		t.Fatalf("clash config not persisted: %+v", c)
+	if !c.TunGuardEnabled || c.TunIface != "utun" || c.ControllerAddr != "127.0.0.1:9090" {
+		t.Fatalf("tun config not persisted: %+v", c)
 	}
-	// 目标带 via_clash
-	_, _ = h.call("POST", "/api/license/ack", tok, map[string]any{})
-	if resp, _ := h.call("POST", "/api/targets", tok, config.Target{MAC: "dd:dd:dd:dd:dd:dd", IP: "192.168.1.91", Iface: "eth0", Enabled: true, ViaClash: true}); resp.StatusCode != 201 {
-		t.Fatal("add via-clash target failed")
-	}
-	if resp, _ := h.call("PUT", "/api/targets/dd:dd:dd:dd:dd:dd", tok, map[string]bool{"via_clash": false}); resp.StatusCode != 200 {
-		t.Fatal("via_clash hot update failed")
-	}
-	if store.Snapshot().Targets[0].ViaClash {
-		t.Fatal("via_clash should be false after update")
-	}
-	// overview 携带 clash 状态
+	// overview.tun 输出
 	_, ov := h.call("GET", "/api/overview", tok, nil)
-	cl, ok := ov["clash"].(map[string]any)
-	if !ok || cl["enabled"] != true || cl["healthy"] != true {
-		t.Fatalf("overview.clash wrong: %v", ov["clash"])
+	tun, ok := ov["tun"].(map[string]any)
+	if !ok || tun["enabled"] != true || tun["tun_iface"] != "utun" {
+		t.Fatalf("overview.tun wrong: %v", ov["tun"])
 	}
 }
