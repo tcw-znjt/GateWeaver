@@ -3,8 +3,10 @@
 **已 fork 并接入自动构建（首选路径）**：
 https://github.com/tcw-znjt/clash-meta —— 打 tag 即由 Actions 产出 root+TUN 版 fpk
 （Release 页直接下载 `clash.meta_<版本>_x86.fpk / _arm.fpk`，含 SHA256SUMS）。
-fork 共 4 处补丁：privilege→root、config.default.yaml 注入 tun 块、build-fpk.py 校验放行 root、
-sw.js 预缓存哈希按 LF 重算 + .gitattributes 固定 html/json eol=lf（Linux 可复现构建）。
+fork 共 6 处补丁：① privilege→root；② config.default.yaml 注入 tun 块（无订阅分支）；
+③ build-fpk.py 校验放行 root；④ sw.js 预缓存哈希按 LF 重算 + .gitattributes 固定 eol（Linux 可复现构建）；
+⑤ cmd/main 订阅模板 heredoc 同样注入 tun 块 + fake-ip-filter + GEOIP,LAN,DIRECT（装时填订阅即自带 TUN）；
+⑥ 面板 TUN 开关只是运行时热改不写回 yaml，配置文件才是持久来源（无需在面板手动开）。
 
 ---
 
