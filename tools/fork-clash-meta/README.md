@@ -1,6 +1,14 @@
 # clash-meta root+TUN fork 说明
 
-目的：让 Clash.Meta(mihomo) 以 **root + TUN 全局接管** 运行，配合 GateWeaver 的 ARP 引导，
+**已 fork 并接入自动构建（首选路径）**：
+https://github.com/tcw-znjt/clash-meta —— 打 tag 即由 Actions 产出 root+TUN 版 fpk
+（Release 页直接下载 `clash.meta_<版本>_x86.fpk / _arm.fpk`，含 SHA256SUMS）。
+fork 共 4 处补丁：privilege→root、config.default.yaml 注入 tun 块、build-fpk.py 校验放行 root、
+sw.js 预缓存哈希按 LF 重算 + .gitattributes 固定 html/json eol=lf（Linux 可复现构建）。
+
+---
+
+以下为本地手工打补丁的备用路径（目的同上）：让 Clash.Meta(mihomo) 以 **root + TUN 全局接管** 运行，配合 GateWeaver 的 ARP 引导，
 实现"被接管设备的流量与 NAS 本地流量走同一条路进 Clash"（等价于旧 OpenWrt + OpenClash 模型）。
 
 上游：https://github.com/qiyueqixi/clash-meta （非 root、无 TUN，不能直接用）
